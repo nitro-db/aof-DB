@@ -195,3 +195,31 @@ finally:
 
 print(f"\nDeploy: {PASS} passed, {FAIL} failed {'✅' if not FAIL else '❌'}")
 sys.exit(1 if FAIL else 0)
+
+
+# ── Extra: encrypted deploy (the actual production bug) ───────────────────────
+# This is the test that would have caught the deploy 502 immediately:
+# NEDB_TMK set + brand-new database = FileNotFoundError on key.enc.tmp
+# because _dek creation ran before _open() created the directory.
+import os as _os
+print("\n── encrypted deploy (NEDB_TMK set) ──")
+_os.environ["NEDB_TMK"] = "220cd848749585949890625368ba44115247b8983b3dc8d53823dcfcaef02ef2"
+import importlib, nedb as _nedb_mod; importlib.reload(_nedb_mod)
+from nedb import NEDB as _NEDB
+import tempfile as _tmp, shutil as _sh
+_etmp = _tmp.mkdtemp()
+try:
+    _edb = _NEDB(_etmp)
+    _edb.put("t", "r1", {"v": 1})
+    _ev = _edb.verify()
+    _edb.close()
+    _edb2 = _NEDB(_etmp)
+    check("encrypted new DB: create + reopen + verify", _ev and _edb2.verify())
+    _edb2.close()
+finally:
+    _sh.rmtree(_etmp, ignore_errors=True)
+    _os.environ.pop("NEDB_TMK", None)
+
+total = PASS + FAIL
+print(f"\nDeploy: {PASS}/{total} passed {'✅' if not FAIL else '❌'}")
+sys.exit(1 if FAIL else 0)

@@ -77,6 +77,10 @@ class NEDB:
         self._dek: Optional[bytes] = None
         resolved_tmk = _crypto.resolve_tmk(tmk)
         if resolved_tmk is not None and path is not None:
+            # Ensure the database directory exists BEFORE creating the DEK file.
+            # _open() calls os.makedirs() too, but it runs after this block —
+            # so a brand-new database would fail with FileNotFoundError on key.enc.tmp.
+            os.makedirs(path, exist_ok=True)
             self._dek = _crypto.load_or_create_dek(path, resolved_tmk)
         if path is not None:
             self._open(path)
