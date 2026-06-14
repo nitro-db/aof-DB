@@ -40,4 +40,4 @@ __all__ = [
     "AutoIndexDB",
     "_native", "__has_native__",
 ]
-__version__ = "0.7.2"
+__version__ = "0.7.3"
