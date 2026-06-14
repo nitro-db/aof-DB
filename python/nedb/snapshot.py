@@ -92,7 +92,18 @@ def save_snapshot(db: "NEDB") -> str:
             for to, added, removed in edges
         ]
 
-    # ── 4. Write snapshot.json ────────────────────────────────────────────────
+    # ── 4. Serialise BlobStore (both tiers) ──────────────────────────────────
+    import base64
+    blobs_data: Dict[str, Any] = {}
+    for tier_name, bs in db.blobs.items():
+        blobs_data[tier_name] = {
+            "chunks": {h: base64.b64encode(data).decode() for h, data in bs.chunks.items()},
+            "files":  bs.files,
+            "logical_bytes": bs.logical_bytes,
+            "dedup_hits":    bs.dedup_hits,
+        }
+
+    # ── 5. Write snapshot.json ────────────────────────────────────────────────
     snap: Dict[str, Any] = {
         "version":        SNAP_VERSION,
         "seq":            snap_seq,
@@ -103,6 +114,7 @@ def save_snapshot(db: "NEDB") -> str:
         "index_config":   [list(t) for t in db.indexes.config],
         "nonces":         dict(db.log._last_nonce),
         "idem":           {k: v for k, v in db.log._idem.items()},
+        "blobs":          blobs_data,
     }
 
     path = _snap_path(db.path)
@@ -170,5 +182,17 @@ def load_snapshot(db: "NEDB") -> int:
     db.log._last_nonce.update(snap.get("nonces", {}))
     db.log._idem.update({k: int(v) for k, v in snap.get("idem", {}).items()})
     db._nonce = dict(db.log._last_nonce)
+
+    # ── Restore BlobStore (Cascade compressed files) ──────────────────────────
+    import base64
+    for tier_name, bs_data in snap.get("blobs", {}).items():
+        if tier_name not in db.blobs:
+            from .cascade import BlobStore
+            db.blobs[tier_name] = BlobStore(tier_name)
+        bs = db.blobs[tier_name]
+        bs.chunks        = {h: base64.b64decode(enc) for h, enc in bs_data.get("chunks", {}).items()}
+        bs.files         = bs_data.get("files", {})
+        bs.logical_bytes = bs_data.get("logical_bytes", 0)
+        bs.dedup_hits    = bs_data.get("dedup_hits", 0)
 
     return int(snap["checkpoint_seq"])
