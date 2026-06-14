@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .cascade import BlobStore
 from . import snapshot as _snap
+from . import crypto as _crypto
 from .index import Indexes, tokenize
 from .log import Op, OpLog, ReplayError  # noqa: F401  (re-exported)
 from .merkle import merkle_proof, merkle_verify
@@ -47,7 +48,8 @@ def apply_op(store: MVCCStore, relations: Relations, indexes: Indexes, op: Op) -
 
 
 class NEDB:
-    def __init__(self, path: Optional[str] = None) -> None:
+    def __init__(self, path: Optional[str] = None,
+                 tmk: Optional[bytes] = None) -> None:
         """Create a database.
 
         With no `path`, NEDB is in-memory (the original behavior). With a `path`
@@ -67,6 +69,11 @@ class NEDB:
 
         self.path = path
         self._aof = None
+        # Encryption: resolve TMK (arg > env) → load/create DEK → None if no TMK
+        self._dek: Optional[bytes] = None
+        resolved_tmk = _crypto.resolve_tmk(tmk)
+        if resolved_tmk is not None and path is not None:
+            self._dek = _crypto.load_or_create_dek(path, resolved_tmk)
         if path is not None:
             self._open(path)
 
@@ -88,8 +95,8 @@ class NEDB:
             ops: List[Op] = []
             if os.path.exists(self._aof_path):
                 with open(self._aof_path, encoding="utf-8") as fh:
-                    for line in fh:
-                        line = line.strip()
+                    for raw_line in fh:
+                        line = _crypto.aof_decode(raw_line, self._dek)
                         if line:
                             ops.append(Op.from_dict(json.loads(line)))
             # Build the full log (needed for verify() and AS OF) but only
@@ -111,8 +118,8 @@ class NEDB:
         ops = []
         if os.path.exists(self._aof_path):
             with open(self._aof_path, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
+                for raw_line in fh:
+                    line = _crypto.aof_decode(raw_line, self._dek)
                     if line:
                         ops.append(Op.from_dict(json.loads(line)))
         self.log.load(ops)
@@ -130,10 +137,11 @@ class NEDB:
 
     def _log_append(self, client: str, nonce: int, op: str, payload: dict,
                     idem: Optional[str] = None):
-        """Append to the in-memory log AND, if durable, to the AOF (fsync'd)."""
+        """Append to the in-memory log AND, if durable, to the AOF (encrypted if DEK set)."""
         rec, created = self.log.append(client, nonce, op, payload, idem)
         if created and self._aof is not None:
-            self._aof.write(json.dumps(rec.to_dict()) + "\n")
+            line = _crypto.aof_encode(json.dumps(rec.to_dict()), self._dek)
+            self._aof.write(line + "\n")
             self._aof.flush()
             os.fsync(self._aof.fileno())
         return rec, created
@@ -157,6 +165,25 @@ class NEDB:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+    def rewrap_key(self, old_tmk: bytes, new_tmk: bytes) -> None:
+        """
+        Key rotation: re-wrap the DEK under a new TMK without re-encrypting data.
+
+        After this call the database opens only with ``new_tmk``.  The DEK —
+        and therefore all encrypted data — stays untouched.
+
+        Example::
+
+            db.rewrap_key(old_tmk=bytes.fromhex("aa..."), new_tmk=bytes.fromhex("bb..."))
+        """
+        if self.path is None:
+            raise ValueError("Key rotation requires a durable NEDB(path) database.")
+        old_k = _crypto.resolve_tmk(old_tmk)
+        new_k = _crypto.resolve_tmk(new_tmk)
+        _crypto.rewrap_dek(self.path, old_k, new_k)
+        # Update in-memory DEK so current session keeps working
+        self._dek = _crypto.load_or_create_dek(self.path, new_k)
 
     def checkpoint(self) -> str:
         """

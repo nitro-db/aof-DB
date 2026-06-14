@@ -92,18 +92,27 @@ def save_snapshot(db: "NEDB") -> str:
             for to, added, removed in edges
         ]
 
-    # ── 4. Serialise BlobStore (both tiers) ──────────────────────────────────
+    # ── 4. Prepare BlobStore (actual encoding happens in step 5) ─────────────
     import base64
     blobs_data: Dict[str, Any] = {}
+
+    # ── 5. Encrypt blob chunks if encryption is enabled ───────────────────────
+    from . import crypto as _crypto
+    dek = getattr(db, "_dek", None)
     for tier_name, bs in db.blobs.items():
         blobs_data[tier_name] = {
-            "chunks": {h: base64.b64encode(data).decode() for h, data in bs.chunks.items()},
+            "chunks": {
+                h: base64.b64encode(
+                    _crypto.chunk_encode(data, dek) if dek else data
+                ).decode()
+                for h, data in bs.chunks.items()
+            },
             "files":  bs.files,
             "logical_bytes": bs.logical_bytes,
             "dedup_hits":    bs.dedup_hits,
         }
 
-    # ── 5. Write snapshot.json ────────────────────────────────────────────────
+    # ── 6. Write snapshot.json (encrypted if DEK set) ─────────────────────────
     snap: Dict[str, Any] = {
         "version":        SNAP_VERSION,
         "seq":            snap_seq,
@@ -119,8 +128,10 @@ def save_snapshot(db: "NEDB") -> str:
 
     path = _snap_path(db.path)
     tmp  = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(snap, fh, separators=(",", ":"))
+    raw = json.dumps(snap, separators=(",", ":")).encode()
+    encoded = _crypto.snapshot_encode(raw, dek)
+    with open(tmp, "wb") as fh:
+        fh.write(encoded)
         fh.flush()
         os.fsync(fh.fileno())
     os.replace(tmp, path)   # atomic rename
@@ -144,8 +155,12 @@ def load_snapshot(db: "NEDB") -> int:
     if not os.path.exists(path):
         return -1   # no snapshot — full replay
 
-    with open(path, encoding="utf-8") as fh:
-        snap = json.load(fh)
+    from . import crypto as _crypto
+    dek = getattr(db, "_dek", None)
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    raw = _crypto.snapshot_decode(raw, dek)
+    snap = json.loads(raw)
 
     if snap.get("version", 0) != SNAP_VERSION:
         return -1   # unknown format — fall back to full replay
@@ -183,14 +198,17 @@ def load_snapshot(db: "NEDB") -> int:
     db.log._idem.update({k: int(v) for k, v in snap.get("idem", {}).items()})
     db._nonce = dict(db.log._last_nonce)
 
-    # ── Restore BlobStore (Cascade compressed files) ──────────────────────────
+    # ── Restore BlobStore — decrypt chunks if encryption enabled ─────────────
     import base64
     for tier_name, bs_data in snap.get("blobs", {}).items():
         if tier_name not in db.blobs:
             from .cascade import BlobStore
             db.blobs[tier_name] = BlobStore(tier_name)
         bs = db.blobs[tier_name]
-        bs.chunks        = {h: base64.b64decode(enc) for h, enc in bs_data.get("chunks", {}).items()}
+        bs.chunks = {
+            h: _crypto.chunk_decode(base64.b64decode(enc), dek)
+            for h, enc in bs_data.get("chunks", {}).items()
+        }
         bs.files         = bs_data.get("files", {})
         bs.logical_bytes = bs_data.get("logical_bytes", 0)
         bs.dedup_hits    = bs_data.get("dedup_hits", 0)

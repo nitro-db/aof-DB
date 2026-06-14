@@ -20,6 +20,7 @@ from .engine import NEDB
 from .log import Op, OpLog, ReplayError
 from .query import Query, parse_nql
 from .snapshot import save_snapshot, load_snapshot
+from .crypto import resolve_tmk, rewrap_dek
 from .sql import sql_exec, sql_to_nql, SQLError, SQLUnsupportedError
 from .redis_compat import RedisCompat, RedisError, RedisUnsupportedError
 from .autoindex import AutoIndexDB
@@ -39,4 +40,4 @@ __all__ = [
     "AutoIndexDB",
     "_native", "__has_native__",
 ]
-__version__ = "0.5.2"
+__version__ = "0.5.3"
