@@ -402,6 +402,21 @@ def make_handler(manager: Manager, token: Optional[str]):
             db = manager.require(name)
             counts = Manager.collection_counts(db)
             snap_path = os.path.join(manager._path(name), "snapshot.json")
+            # Extract all unique relations from the adjacency list so the
+            # studio graph can show edges without a prior schema document.
+            relations = []
+            seen = set()
+            for (frm, rel), edges in db.relations._adj.items():
+                frm_coll = frm.split(":", 1)[0] if ":" in frm else frm
+                for to, added, removed in edges:
+                    if removed is not None:
+                        continue  # skip unlinked edges
+                    to_coll = to.split(":", 1)[0] if ":" in to else to
+                    key = (frm_coll, rel, to_coll)
+                    if key not in seen:
+                        seen.add(key)
+                        relations.append({"from": frm_coll, "relation": rel,
+                                          "to": to_coll, "cardinality": "one_to_many"})
             return {
                 "name": name,
                 "seq": db.seq,
@@ -409,6 +424,7 @@ def make_handler(manager: Manager, token: Optional[str]):
                 "rows": sum(counts.values()),
                 "collections": counts,
                 "indexes": [list(t) for t in db.indexes.config],
+                "relations": relations,
                 "integrity": {"ok": db.verify()},
                 "encrypted": db._dek is not None,
                 "has_snapshot": os.path.exists(snap_path),
