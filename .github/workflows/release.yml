@@ -54,13 +54,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Stage Python source into crate (maturin mixed layout)
+        # maturin only bundles a python-source that lives inside the project root.
+        # Copy python/nedb -> rust/crates/nedb-py/python/nedb so the native wheel
+        # ships the full package (all .py modules + nedbd) next to _native.so,
+        # not just the bare extension. Runs on the host; the repo is mounted into
+        # the manylinux container, so the staged dir is visible to maturin.
+        shell: bash
+        run: |
+          rm -rf rust/crates/nedb-py/python
+          mkdir -p rust/crates/nedb-py/python
+          cp -r python/nedb rust/crates/nedb-py/python/nedb
+          echo "Staged $(find rust/crates/nedb-py/python/nedb -name '*.py' | wc -l) python files"
       - name: Build wheel (maturin)
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          # Run from inside the crate so maturin resolves python-source
-          # ("../../../python") relative to the pyproject.toml location and
-          # bundles the full Python package alongside the .so extension.
+          # Run from inside the crate so maturin finds pyproject.toml +
+          # ./python/nedb and bundles the full package with the .so extension.
           working-directory: rust/crates/nedb-py
           args: --release --out ../../../dist
           manylinux: auto

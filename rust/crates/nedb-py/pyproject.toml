@@ -9,7 +9,7 @@ build-backend = "maturin"
 
 [project]
 name = "nedb-engine"
-version = "0.7.3"
+version = "0.7.4"
 description = "NEDB — versioned, self-compressing, time-traveling embedded database with Rust native core"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
@@ -33,7 +33,10 @@ Homepage = "https://github.com/Eth-Interchained/nedb"
 Repository = "https://github.com/Eth-Interchained/nedb"
 
 [tool.maturin]
-# Bundle Python source alongside the Rust extension. python-source points to the
-# directory that *contains* the `nedb/` package (3 levels up from this crate).
-python-source = "../../../python"
+# Bundle Python source alongside the Rust extension (mixed Rust/Python layout).
+# maturin only honors a python-source that lives INSIDE the project root — a
+# "../" path that escapes the crate dir is silently ignored (produces an .so-only
+# wheel). So CI stages the package at ./python/nedb before building; see the
+# "Stage Python source" step in .github/workflows/release.yml.
+python-source = "python"
 module-name = "nedb._native"
