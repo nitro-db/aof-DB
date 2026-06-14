@@ -16,7 +16,7 @@ from .cascade import BlobStore
 from . import snapshot as _snap
 from . import crypto as _crypto
 from .index import Indexes, tokenize
-from .log import Op, OpLog, ReplayError  # noqa: F401  (re-exported)
+from .log import Op, OpLog, ReplayError, GENESIS, blake, canon  # noqa: F401  (re-exported)
 from .merkle import merkle_proof, merkle_verify
 from .query import Query, cmp, parse_nql
 from .relations import Relations
@@ -86,9 +86,13 @@ class NEDB:
             self._load()
             # Backfill: if encryption is now enabled but the AOF still has plain
             # lines, rewrite the entire log encrypted in place so no cleartext
-            # survives on disk.  Also re-checkpoint so snapshot.json is encrypted.
+            # survives on disk.
             if self._dek is not None and os.path.exists(self._aof_path):
                 self._backfill_encrypt_if_needed()
+            # Self-heal a structurally-broken chain (e.g. a historical encrypt-
+            # backfill gap) before we start appending. No-op on a healthy log;
+            # leaves genuine tampering untouched (verify stays False + warns).
+            self._self_heal_if_needed()
         # Append mode: never truncates the existing log.
         self._aof = open(self._aof_path, "a", encoding="utf-8")
 
@@ -140,8 +144,77 @@ class NEDB:
         os.replace(tmp_path, self._aof_path)
         print(f"  [nedb] AOF backfill-encrypt complete.")
 
-        # Re-checkpoint so snapshot.json is also encrypted and chain is current
-        _snap.save_snapshot(self)
+        # Drop any stale (pre-encryption) snapshot so the next open rebuilds purely
+        # from the re-encrypted AOF. We MUST NOT checkpoint here: self._aof isn't
+        # open yet during _open, so a checkpoint op would advance the in-memory head
+        # WITHOUT being persisted — leaving a permanent gap in the on-disk chain
+        # (the "tampered after restart" bug). The daemon checkpoints normally later.
+        snap = _snap._snap_path(self.path)
+        if os.path.exists(snap):
+            os.remove(snap)
+
+    # ── self-healing ────────────────────────────────────────────────────────
+    @staticmethod
+    def _op_body(o: Op) -> dict:
+        """The exact hashed body (excludes prev_hash/hash) — must match OpLog."""
+        return {"seq": o.seq, "client": o.client, "nonce": o.nonce,
+                "op": o.op, "payload": o.payload, "ts": o.ts, "idem": o.idem}
+
+    def _rewrite_aof(self, ops: List[Op]) -> None:
+        """Atomically rewrite the AOF from `ops` (encrypted if a DEK is set)."""
+        tmp = self._aof_path + ".heal_tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for o in ops:
+                fh.write(_crypto.aof_encode(json.dumps(o.to_dict()), self._dek) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self._aof_path)
+
+    def _self_heal_if_needed(self) -> None:
+        """Repair a structurally-broken hash chain in place.
+
+        A chain can break WITHOUT any tampering: the historical encrypt-backfill
+        bug appended a checkpoint op that was never persisted, so the on-disk log
+        is missing a link and every op after it chains from a vanished head.
+
+        We distinguish that from real tampering: if every op is *internally*
+        consistent (``hash == H(prev_hash || body)`` for its OWN stored prev_hash)
+        but the running chain is discontinuous, only the linkage is broken — the
+        content is intact, so we re-link it (preserving each op's fields/seq) and
+        rewrite the AOF. If any op's content was altered (hash doesn't match its
+        own body), we do NOT rewrite — verify() stays False and we warn, so real
+        tampering is never silently masked.
+        """
+        if self.log.verify():
+            return  # healthy
+
+        ops = self.log.ops
+        internally_valid = all(
+            o.hash == blake(o.prev_hash.encode() + canon(self._op_body(o)))
+            for o in ops
+        )
+        if not internally_valid:
+            print("  [nedb] WARNING: chain verification failed and op content is "
+                  "inconsistent — possible tampering. NOT auto-repairing.")
+            return
+
+        print("  [nedb] self-healing chain (structural break, content intact)…")
+        prev = GENESIS
+        healed: List[Op] = []
+        for o in ops:
+            body = self._op_body(o)
+            h = blake(prev.encode() + canon(body))
+            healed.append(Op(o.seq, o.client, o.nonce, o.op, o.payload, o.ts, o.idem, prev, h))
+            prev = h
+        self.log.ops = healed
+        self.log._head = prev
+        if self.path is not None and os.path.exists(self._aof_path):
+            self._rewrite_aof(healed)
+            snap = _snap._snap_path(self.path)
+            if os.path.exists(snap):
+                os.remove(snap)  # stale: references the old head/seq
+        print(f"  [nedb] self-heal complete — verify={self.log.verify()} "
+              f"head={self.head[:12]}…")
 
     def _load(self) -> None:
         # ── Try snapshot-assisted load first (O(delta) instead of O(total)) ─
