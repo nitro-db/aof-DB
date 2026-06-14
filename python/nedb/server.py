@@ -42,6 +42,7 @@ import json
 import os
 import re
 import shutil
+import traceback as _tb
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse, parse_qs
@@ -52,6 +53,14 @@ from .concurrent import Sequencer
 from .log import ReplayError
 
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
+# Verbose request logging — set NEDBD_DEBUG=1 to enable.
+_DEBUG = os.environ.get("NEDBD_DEBUG", "").strip() in ("1", "true", "yes")
+
+def _log(*args: object) -> None:
+    """Print only when NEDBD_DEBUG=1."""
+    if _DEBUG:
+        print(*args, flush=True)
 
 
 class HttpError(Exception):
@@ -112,17 +121,27 @@ class Manager:
         self._valid(name)
         if self.exists(name):
             raise HttpError(409, f"database already exists: {name}")
+        _log(f"  [nedbd] creating db '{name}'…")
         db = self.open(name)
         init = init or {}
+        # Phase 1 — indexes
         for spec in init.get("indexes", []):
             coll, field, kind = spec[0], spec[1], (spec[2] if len(spec) > 2 else "eq")
+            _log(f"  [nedbd]   index  {coll}.{field} ({kind})")
             db.create_index(coll, field, kind)
+        # Phase 2 — seed data
         for coll, docs in (init.get("seed") or {}).items():
+            _log(f"  [nedbd]   seed   {coll} × {len(docs)} rows")
             for i, doc in enumerate(docs):
                 rid = str(doc.get("_id") or doc.get("id") or f"{coll}-{i + 1}")
                 db.put(coll, rid, dict(doc))
-        for link in init.get("links", []):
+        # Phase 3 — links
+        links = init.get("links", [])
+        if links:
+            _log(f"  [nedbd]   links  {len(links)}")
+        for link in links:
             db.link(link[0], link[1], link[2])
+        _log(f"  [nedbd] db '{name}' created  seq={db.seq}")
         return self.summary(name)
 
     def drop(self, name: str) -> bool:
@@ -244,6 +263,7 @@ def make_handler(manager: Manager, token: Optional[str]):
             self._handle("DELETE")
 
         def _handle(self, method: str) -> None:
+            _log(f"  [nedbd] {method} {self.path}")
             try:
                 parts, query = self._parts()
 
@@ -264,9 +284,14 @@ def make_handler(manager: Manager, token: Optional[str]):
                     if method == "POST":
                         b = self._body()
                         name = str(b.get("name", "")).strip()
+                        init = b.get("init") or {}
                         if not name:
                             raise HttpError(400, "name is required")
-                        self._send(201, {"database": manager.create(name, b.get("init"))})
+                        n_idx  = len(init.get("indexes", []))
+                        n_seed = sum(len(v) for v in (init.get("seed") or {}).values())
+                        n_lnk  = len(init.get("links", []))
+                        _log(f"  [nedbd] deploy '{name}' — {n_idx} indexes, {n_seed} seed rows, {n_lnk} links")
+                        self._send(201, {"database": manager.create(name, init)})
                         return
 
                 if len(parts) == 3 and parts[:2] == ["v1", "databases"]:
@@ -462,9 +487,13 @@ def make_handler(manager: Manager, token: Optional[str]):
 
                 raise HttpError(404, "no such route")
             except HttpError as e:
+                _log(f"  [nedbd] HTTP {e.status}: {e.message}")
                 self._send(e.status, {"error": e.message})
             except Exception as e:  # noqa: BLE001
-                self._send(500, {"error": str(e)})
+                # Always print errors (regardless of debug flag) so failures are visible.
+                print(f"  [nedbd] ERROR {method} {self.path}: {e}", flush=True)
+                _tb.print_exc()
+                self._send(500, {"error": str(e), "trace": _tb.format_exc()})
 
         def _detail(self, name: str) -> dict:
             db = manager.require(name)
