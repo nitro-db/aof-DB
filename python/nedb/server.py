@@ -361,7 +361,9 @@ def main() -> None:
 
     import signal
     import threading
+    from .resp2 import make_resp2_server
 
+    resp2_port = int(os.environ.get("NEDBD_RESP2_PORT", "0"))  # 0 = disabled
     manager = Manager(data)
     httpd = ThreadingHTTPServer((host, port), make_handler(manager, token))
     auth = "on" if token else "off"
@@ -388,10 +390,20 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT,  _shutdown)
 
+    # Optional RESP2 server (redis-cli / redis-benchmark compatible)
+    resp2_srv = None
+    if resp2_port > 0:
+        resp2_srv = make_resp2_server(manager, host, resp2_port)
+        t = threading.Thread(target=resp2_srv.serve_forever, daemon=True)
+        t.start()
+        print(f"  resp2  — redis://  {host}:{resp2_port}  (RESP2 wire protocol)")
+
     try:
         httpd.serve_forever()   # blocks; unblocked by _shutdown → httpd.shutdown()
     finally:
         httpd.server_close()
+        if resp2_srv:
+            resp2_srv.shutdown()
         manager.close_all()   # checkpoint → fsync → close every open database
         print("nedbd stopped cleanly.")
 
