@@ -53,20 +53,40 @@ class Op:
     idem: Optional[str]
     prev_hash: str
     hash: str
+    # ── Causal provenance (v0.9.0+) ─────────────────────────────────────────
+    # Optional fields that, when present, are sealed inside the hash chain so
+    # they are tamper-evident and time-stamped at write time.
+    #   caused_by  — seqs of the ops that led to this write (backward trace).
+    #   evidence   — source type: "user_message" | "inference" | "tool_result"
+    #                             | "correction" | "external"
+    #   confidence — agent's certainty in this write (0.0 – 1.0).
+    #
+    # Backward-compatible: old ops that lack these fields omit them from the
+    # hash body so existing chain hashes verify without modification.
+    caused_by:  Optional[List[int]] = None
+    evidence:   Optional[str]       = None
+    confidence: Optional[float]     = None
 
     def to_dict(self) -> dict:
         """Serialize for the append-only log file (AOF)."""
-        return {
+        d: dict = {
             "seq": self.seq, "client": self.client, "nonce": self.nonce,
             "op": self.op, "payload": self.payload, "ts": self.ts,
             "idem": self.idem, "prev_hash": self.prev_hash, "hash": self.hash,
         }
+        if self.caused_by  is not None: d["caused_by"]  = self.caused_by
+        if self.evidence   is not None: d["evidence"]   = self.evidence
+        if self.confidence is not None: d["confidence"] = self.confidence
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Op":
         return cls(
             d["seq"], d["client"], d["nonce"], d["op"], d["payload"],
             d["ts"], d.get("idem"), d["prev_hash"], d["hash"],
+            caused_by  = d.get("caused_by"),
+            evidence   = d.get("evidence"),
+            confidence = d.get("confidence"),
         )
 
 
@@ -85,6 +105,9 @@ class OpLog:
         payload: dict,
         idem: Optional[str] = None,
         ts: Optional[float] = None,
+        caused_by:  Optional[List[int]] = None,
+        evidence:   Optional[str]       = None,
+        confidence: Optional[float]     = None,
     ) -> Tuple[Op, bool]:
         """Append an op. Returns (op, created). `created` is False when the op was
         deduplicated by its idempotency key (a no-op replay-safe return)."""
@@ -101,12 +124,18 @@ class OpLog:
 
         seq = len(self.ops)
         ts = time.time() if ts is None else ts
-        body = {
+        body: dict = {
             "seq": seq, "client": client, "nonce": nonce,
             "op": op, "payload": payload, "ts": ts, "idem": idem,
         }
+        # Provenance fields are sealed INTO the hash when present so they are
+        # tamper-evident — omitting them when absent keeps old ops verifiable.
+        if caused_by  is not None: body["caused_by"]  = caused_by
+        if evidence   is not None: body["evidence"]   = evidence
+        if confidence is not None: body["confidence"] = confidence
         h = blake(self._head.encode() + canon(body))
-        rec = Op(seq, client, nonce, op, payload, ts, idem, self._head, h)
+        rec = Op(seq, client, nonce, op, payload, ts, idem, self._head, h,
+                 caused_by=caused_by, evidence=evidence, confidence=confidence)
 
         self.ops.append(rec)
         self._last_nonce[client] = nonce
@@ -130,14 +159,24 @@ class OpLog:
                 self._idem[o.idem] = o.seq
         self._head = self.ops[-1].hash if self.ops else GENESIS
 
+    @staticmethod
+    def _op_body(o: "Op") -> dict:
+        """The canonical hash body for an op — must match exactly what append() hashes."""
+        body: dict = {
+            "seq": o.seq, "client": o.client, "nonce": o.nonce,
+            "op": o.op, "payload": o.payload, "ts": o.ts, "idem": o.idem,
+        }
+        # Provenance fields included only when present (backward-compat with old ops).
+        if o.caused_by  is not None: body["caused_by"]  = o.caused_by
+        if o.evidence   is not None: body["evidence"]   = o.evidence
+        if o.confidence is not None: body["confidence"] = o.confidence
+        return body
+
     def verify(self) -> bool:
         """Re-walk the chain and confirm no op has been tampered with."""
         prev = GENESIS
         for o in self.ops:
-            body = {
-                "seq": o.seq, "client": o.client, "nonce": o.nonce,
-                "op": o.op, "payload": o.payload, "ts": o.ts, "idem": o.idem,
-            }
+            body = self._op_body(o)
             if o.prev_hash != prev:
                 return False
             if o.hash != blake(prev.encode() + canon(body)):

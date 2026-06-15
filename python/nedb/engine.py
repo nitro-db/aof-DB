@@ -17,13 +17,15 @@ from . import snapshot as _snap
 from . import crypto as _crypto
 from .index import Indexes, tokenize
 from .log import Op, OpLog, ReplayError, GENESIS, blake, canon  # noqa: F401  (re-exported)
+from typing import List as _List
 from .merkle import merkle_proof, merkle_verify
 from .query import Query, cmp, parse_nql
 from .relations import Relations
 from .store import MVCCStore
 
 
-def apply_op(store: MVCCStore, relations: Relations, indexes: Indexes, op: Op) -> None:
+def apply_op(store: MVCCStore, relations: Relations, indexes: Indexes, op: Op,
+             cause_map: Optional[Dict[int, List[int]]] = None) -> None:
     """Deterministically fold one op into materialized state."""
     p = op.payload
     if op.op == "put":
@@ -45,6 +47,10 @@ def apply_op(store: MVCCStore, relations: Relations, indexes: Indexes, op: Op) -
         relations.unlink(p["frm"], p["rel"], p["to"], op.seq)
     elif op.op == "put_file":
         pass  # bytes live in the content-addressed BlobStore; log records the root only
+    # Build causal reverse index so TRACE ... REVERSE queries are O(1).
+    if cause_map is not None and op.caused_by:
+        for cause_seq in op.caused_by:
+            cause_map.setdefault(cause_seq, []).append(op.seq)
 
 
 class NEDB:
@@ -66,6 +72,9 @@ class NEDB:
         self.indexes = Indexes()
         self.blobs: Dict[str, BlobStore] = {"warm": BlobStore("warm"), "cold": BlobStore("cold")}
         self._nonce: Dict[str, int] = {}
+        # Causal provenance reverse index: cause_seq → [dependent_seq, ...]
+        # Populated in apply_op when an op carries caused_by seqs.
+        self.cause_map: Dict[int, List[int]] = {}
 
         self.path = path
         self._aof = None
@@ -164,9 +173,9 @@ class NEDB:
     # ── self-healing ────────────────────────────────────────────────────────
     @staticmethod
     def _op_body(o: Op) -> dict:
-        """The exact hashed body (excludes prev_hash/hash) — must match OpLog."""
-        return {"seq": o.seq, "client": o.client, "nonce": o.nonce,
-                "op": o.op, "payload": o.payload, "ts": o.ts, "idem": o.idem}
+        """The exact hashed body — delegates to OpLog's canonical method."""
+        from .log import OpLog as _OL
+        return _OL._op_body(o)
 
     def _rewrite_aof(self, ops: List[Op]) -> None:
         """Atomically rewrite the AOF from `ops` (encrypted if a DEK is set)."""
@@ -241,7 +250,7 @@ class NEDB:
             self.log.load(ops)
             for op in self.log.ops:
                 if op.seq > snap_seq:
-                    apply_op(self.store, self.relations, self.indexes, op)
+                    apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
             self._nonce = dict(self.log._last_nonce)
             return
 
@@ -262,7 +271,7 @@ class NEDB:
         self.log.load(ops)
         # 3) fold
         for op in self.log.ops:
-            apply_op(self.store, self.relations, self.indexes, op)
+            apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
         # 4) nonce restoration
         self._nonce = dict(self.log._last_nonce)
 
@@ -273,9 +282,14 @@ class NEDB:
             json.dump({"indexes": [list(t) for t in self.indexes.config]}, fh)
 
     def _log_append(self, client: str, nonce: int, op: str, payload: dict,
-                    idem: Optional[str] = None):
+                    idem: Optional[str] = None,
+                    caused_by: Optional[List[int]] = None,
+                    evidence: Optional[str] = None,
+                    confidence: Optional[float] = None):
         """Append to the in-memory log AND, if durable, to the AOF (encrypted if DEK set)."""
-        rec, created = self.log.append(client, nonce, op, payload, idem)
+        rec, created = self.log.append(client, nonce, op, payload, idem,
+                                       caused_by=caused_by, evidence=evidence,
+                                       confidence=confidence)
         if created and self._aof is not None:
             line = _crypto.aof_encode(json.dumps(rec.to_dict()), self._dek)
             self._aof.write(line + "\n")
@@ -383,16 +397,26 @@ class NEDB:
     # --- mutations ----------------------------------------------------------
     def put(self, coll: str, id: str, doc: dict, client: str = "local",
             nonce: Optional[int] = None, idem: Optional[str] = None,
-            ttl_s: Optional[float] = None) -> dict:
+            ttl_s: Optional[float] = None,
+            caused_by: Optional[List[int]] = None,
+            evidence: Optional[str] = None,
+            confidence: Optional[float] = None) -> dict:
         key = f"{coll}:{id}"
         doc = dict(doc)
         doc.setdefault("_id", id)
         doc = self._embed_ttl(doc, ttl_s)
+        # Mirror causal provenance into the doc as queryable _-prefixed fields.
+        # They're also sealed in the Op hash via _log_append so they're tamper-evident.
+        if caused_by  is not None: doc["_caused_by"]  = caused_by
+        if evidence   is not None: doc["_evidence"]   = evidence
+        if confidence is not None: doc["_confidence"] = confidence
         nonce = self._next(client) if nonce is None else nonce
         op, created = self._log_append(client, nonce, "put",
-                                       {"key": key, "coll": coll, "id": id, "doc": doc}, idem)
+                                       {"key": key, "coll": coll, "id": id, "doc": doc},
+                                       idem, caused_by=caused_by,
+                                       evidence=evidence, confidence=confidence)
         if created:
-            apply_op(self.store, self.relations, self.indexes, op)
+            apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
         return self.store.get(key)
 
     def delete(self, coll: str, id: str, client: str = "local",
@@ -402,7 +426,7 @@ class NEDB:
         op, created = self._log_append(client, nonce, "delete",
                                        {"key": key, "coll": coll, "id": id}, idem)
         if created:
-            apply_op(self.store, self.relations, self.indexes, op)
+            apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
 
     def get(self, coll: str, id: str, as_of: Optional[int] = None) -> Optional[dict]:
         doc = self.store.get(f"{coll}:{id}", as_of)
@@ -441,14 +465,14 @@ class NEDB:
         nonce = self._next(client) if nonce is None else nonce
         op, created = self._log_append(client, nonce, "link", {"frm": frm, "rel": rel, "to": to})
         if created:
-            apply_op(self.store, self.relations, self.indexes, op)
+            apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
 
     def unlink(self, frm: str, rel: str, to: str, client: str = "local",
                nonce: Optional[int] = None) -> None:
         nonce = self._next(client) if nonce is None else nonce
         op, created = self._log_append(client, nonce, "unlink", {"frm": frm, "rel": rel, "to": to})
         if created:
-            apply_op(self.store, self.relations, self.indexes, op)
+            apply_op(self.store, self.relations, self.indexes, op, self.cause_map)
 
     def neighbors(self, frm: str, rel: str, as_of: Optional[int] = None) -> List[str]:
         return self.relations.neighbors(frm, rel, as_of)
@@ -542,6 +566,62 @@ class NEDB:
                     if d is not None:
                         trav.append((nb, d))
             rows = trav
+
+        # TRACE caused_by — causal provenance traversal
+        if plan.get("trace"):
+            if not plan.get("trace_reverse"):
+                # Backward: start from current result set, follow caused_by seqs
+                # recursively to their originating documents.
+                result_docs = [d for _, d in rows]
+                visited_seqs: set = set()
+                frontier = list(result_docs)
+                out_docs = []
+                while frontier:
+                    doc = frontier.pop()
+                    causes = doc.get("_caused_by") or []
+                    for cause_seq in causes:
+                        if cause_seq in visited_seqs:
+                            continue
+                        visited_seqs.add(cause_seq)
+                        if cause_seq < len(self.log.ops):
+                            op = self.log.ops[cause_seq]
+                            if op.op == "put":
+                                cause_key = op.payload.get("key", "")
+                                cause_doc = self.store.get(cause_key, as_of)
+                                if cause_doc is not None:
+                                    out_docs.append((cause_key, cause_doc))
+                                    frontier.append(cause_doc)
+                rows = out_docs
+            else:
+                # Forward: start from current result set, follow cause_map to find
+                # all documents that declared these as causes (downstream effects).
+                result_docs = [d for _, d in rows]
+                visited_seqs_fwd: set = set()
+                out_fwd = []
+                queue = []
+                for doc in result_docs:
+                    d_id = doc.get("_id")
+                    if d_id is not None:
+                        coll_p = plan["from"]
+                        key_p = f"{coll_p}:{d_id}"
+                        # Find the seq of the op that last wrote this key
+                        for op in reversed(self.log.ops):
+                            if op.op == "put" and op.payload.get("key") == key_p:
+                                queue.append(op.seq)
+                                break
+                for seq in queue:
+                    for dep_seq in self.cause_map.get(seq, []):
+                        if dep_seq in visited_seqs_fwd:
+                            continue
+                        visited_seqs_fwd.add(dep_seq)
+                        if dep_seq < len(self.log.ops):
+                            dep_op = self.log.ops[dep_seq]
+                            if dep_op.op == "put":
+                                dep_key = dep_op.payload.get("key", "")
+                                dep_doc = self.store.get(dep_key, as_of)
+                                if dep_doc is not None:
+                                    out_fwd.append((dep_key, dep_doc))
+                rows = out_fwd
 
         if plan.get("limit") is not None:
             rows = rows[: plan["limit"]]

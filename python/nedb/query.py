@@ -35,8 +35,8 @@ _TOKEN_RE = re.compile(
 )
 
 _KEYWORDS = {"from", "as", "of", "where", "and", "search", "order", "by",
-             "asc", "desc", "traverse", "limit", "true", "false", "null",
-             "group", "count", "sum", "avg", "min", "max"}
+             "asc", "desc", "traverse", "trace", "reverse", "limit",
+             "true", "false", "null", "group", "count", "sum", "avg", "min", "max"}
 
 
 def _lex(text: str) -> List[Tuple[str, Any]]:
@@ -67,7 +67,8 @@ def _lex(text: str) -> List[Tuple[str, Any]]:
 def empty_plan(coll: str) -> dict:
     return {"from": coll, "as_of": None, "where": [], "search": None,
             "order_by": None, "traverse": None, "limit": None,
-            "group_by": None, "aggregate": None}
+            "group_by": None, "aggregate": None,
+            "trace": None, "trace_reverse": False}
 
 
 def parse_nql(text: str) -> dict:
@@ -166,6 +167,21 @@ def parse_nql(text: str) -> dict:
             raise SyntaxError("NQL: expected relation after TRAVERSE")
         i += 1
         plan["traverse"] = rel
+
+    # TRACE <field> [REVERSE]
+    # Walks the causal provenance graph.
+    # TRACE caused_by          → backward: which ops caused these documents?
+    # TRACE caused_by REVERSE  → forward:  which documents did these ops cause?
+    if peek() == ("kw", "trace"):
+        i += 1
+        t, tf = peek()
+        if t not in ("word", "kw"):
+            raise SyntaxError("NQL: expected field name after TRACE")
+        i += 1
+        plan["trace"] = tf
+        if peek() == ("kw", "reverse"):
+            i += 1
+            plan["trace_reverse"] = True
 
     # LIMIT n
     if peek() == ("kw", "limit"):
