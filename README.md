@@ -269,6 +269,19 @@ Prompt-to-database scaffolding GUI with schema graph, NQL console, time-travel s
 
 ---
 
+## Repos
+
+| Repo | Description |
+|---|---|
+| [Eth-Interchained/nedb](https://github.com/Eth-Interchained/nedb) | Canonical source — engine, Rust core, CI |
+| [Eth-Interchained/nedb-studio](https://github.com/Eth-Interchained/nedb-studio) | Studio UI (GPLv3) |
+| [aiassistsecure/nedb](https://github.com/aiassistsecure/nedb) | Production mirror |
+| [aiassistsecure/nedb-studio](https://github.com/aiassistsecure/nedb-studio) | Production mirror — studio |
+
+**Packages:** [PyPI nedb-engine](https://pypi.org/project/nedb-engine/) · [npm nedb-engine](https://www.npmjs.com/package/nedb-engine)
+
+---
+
 ## License
 
 See `LICENSE` file. · © INTERCHAINED, LLC — [interchained.org](https://interchained.org)
