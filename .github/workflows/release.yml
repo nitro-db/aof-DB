@@ -158,4 +158,14 @@ jobs:
       - name: Publish to npm (all platform binaries bundled)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        run: |
+          # Determine npm dist-tag from version string
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if echo "$VERSION" | grep -qE '(alpha|beta|rc|pre)'; then
+            TAG=$(echo "$VERSION" | grep -oE '(alpha|beta|rc|pre)[.0-9]*' | head -1 | sed 's/[.].*$//')
+            echo "Publishing pre-release with --tag $TAG"
+            npm publish --access public --tag "$TAG"
+          else
+            echo "Publishing stable release as latest"
+            npm publish --access public
+          fi
