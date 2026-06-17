@@ -102,7 +102,6 @@ impl Manager {
 
     /// After a write: re-evaluate all subscriptions for `db`, emit diffs.
     fn notify_subscribers(&self, db: &str, db_arc: &Arc<crate::db::Db>) {
-        use std::collections::HashSet;
         let keys: Vec<SubKey> = self.subs.iter()
             .filter(|e| e.key().0 == db)
             .map(|e| e.key().clone())
@@ -668,7 +667,7 @@ async fn subscribe_query(
 
     let stream = BroadcastStream::new(rx).filter_map(|msg| {
         match msg {
-            Ok(line) => Some(Ok(Event::default().data(line))),
+            Ok(line) => Some(Ok::<Event, std::convert::Infallible>(Event::default().data(line))),
             Err(_)   => None,
         }
     });
@@ -693,7 +692,7 @@ async fn log_events(State(mgr): State<Manager>) -> Sse<impl futures_core::Stream
     let rx = mgr.log_tx.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|msg| {
         match msg {
-            Ok(line) => Some(Ok(Event::default().data(line))),
+            Ok(line) => Some(Ok::<Event, std::convert::Infallible>(Event::default().data(line))),
             Err(_)   => None,  // lagged — skip
         }
     });
