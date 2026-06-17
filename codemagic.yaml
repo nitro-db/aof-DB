@@ -9,7 +9,16 @@
 #
 # Secrets required (set in Codemagic App Settings → Environment variables):
 #   PYPI_API_TOKEN  — PyPI token with upload access to nedb-engine
-#   NPM_TOKEN       — npm token with publish access to nedb-engine
+#   GITHUB_TOKEN    — GitHub personal access token with 'repo' + 'write:packages' scope
+#                     Used to upload Mac .node binaries to the GitHub release so
+#                     GitHub's publish-npm job can assemble the complete npm bundle.
+#
+# How npm publishing works (split-build assembly):
+#   1. GitHub CI builds Linux + Windows .node → uploads to GitHub release
+#   2. Codemagic builds Mac arm64 + x86_64 .node → uploads to SAME GitHub release
+#   3. GitHub's publish-npm polls the release until all 4 binaries are present
+#   4. publish-npm downloads all, runs ONE npm publish with the complete bundle
+#   PyPI wheels: each platform uploads independently (--skip-existing, no conflict)
 
 workflows:
 
@@ -29,7 +38,7 @@ workflows:
         RUST_TARGET: aarch64-apple-darwin
         WHEEL_LABEL: macos-arm64
       groups:
-        - nedb_secrets          # contains PYPI_API_TOKEN
+        - nedb_secrets          # contains PYPI_API_TOKEN + GITHUB_TOKEN
     scripts:
       - name: Install Rust
         script: |
@@ -79,14 +88,20 @@ workflows:
           npm install
           npx napi build --platform --release --target $RUST_TARGET \
             --cargo-cwd rust/crates/nedb-node
-          echo "napi artifacts: $(ls *.node index.js index.d.ts 2>/dev/null)"
+          echo "napi .node files: $(ls *.node 2>/dev/null)"
 
-      - name: Publish napi to npm
+      - name: Upload Mac arm64 .node to GitHub release
         script: |
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
+          # Install gh CLI if not present
+          which gh || brew install gh
           VERSION=$(node -e "console.log(require('./package.json').version)")
-          echo "Publishing nedb-engine@$VERSION (macos-arm64)"
-          npm publish --access public || echo "Already published — skipping"
+          TAG="v$VERSION"
+          echo "Uploading Mac arm64 .node to GitHub release $TAG"
+          for f in *.node; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" \
+              --repo Eth-Interchained/nedb --clobber || true
+          done
+          echo "Uploaded: $(ls *.node 2>/dev/null)"
 
     artifacts:
       - dist/*.whl
@@ -157,14 +172,19 @@ workflows:
           npm install
           npx napi build --platform --release --target $RUST_TARGET \
             --cargo-cwd rust/crates/nedb-node
-          echo "napi artifacts: $(ls *.node index.js index.d.ts 2>/dev/null)"
+          echo "napi .node files: $(ls *.node 2>/dev/null)"
 
-      - name: Publish napi to npm
+      - name: Upload Mac x86_64 .node to GitHub release
         script: |
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
+          which gh || brew install gh
           VERSION=$(node -e "console.log(require('./package.json').version)")
-          echo "Publishing nedb-engine@$VERSION (macos-x86_64)"
-          npm publish --access public || echo "Already published — skipping"
+          TAG="v$VERSION"
+          echo "Uploading Mac x86_64 .node to GitHub release $TAG"
+          for f in *.node; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" \
+              --repo Eth-Interchained/nedb --clobber || true
+          done
+          echo "Uploaded: $(ls *.node 2>/dev/null)"
 
     artifacts:
       - dist/*.whl
