@@ -168,6 +168,7 @@ jobs:
       - name: Build native addon
         run: npx napi build --platform --release --target ${{ matrix.target }} --cargo-cwd rust/crates/nedb-node
       - name: Upload .node binary to GitHub release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
