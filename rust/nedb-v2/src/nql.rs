@@ -103,7 +103,7 @@ impl<'a> Lexer<'a> {
             let upper = word.to_uppercase();
             let keywords = ["FROM","AS","OF","VALID","WHERE","AND","ORDER","BY",
                             "DESC","LIMIT","GROUP","COUNT","SUM","AVG","MIN","MAX",
-                            "TRACE","REVERSE","SEARCH","NOT","NULL","TRUE","FALSE"];
+                            "TRACE","TRAVERSE","REVERSE","SEARCH","NOT","NULL","TRUE","FALSE"];
             if keywords.contains(&upper.as_str()) {
                 return Tok::Kw(upper);
             }
@@ -151,6 +151,7 @@ pub struct Query {
     pub group_by:   Option<(String, GroupAgg)>,
     pub trace:      Option<String>,     // edge type (usually "caused_by")
     pub trace_rev:  bool,
+    pub traverse:   Option<String>,     // named relation for TRAVERSE rel
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -195,6 +196,7 @@ impl Parser {
             order_by: None, order_desc: false,
             limit: None, group_by: None,
             trace: None, trace_rev: false,
+            traverse: None,
         };
 
         loop {
@@ -296,6 +298,15 @@ impl Parser {
                     if let Tok::Kw(k) = self.peek() {
                         if k == "REVERSE" { self.advance(); q.trace_rev = true; }
                     }
+                }
+
+                Tok::Kw(k) if k == "TRAVERSE" => {
+                    self.advance();
+                    let rel = match self.advance() {
+                        Tok::Ident(s) | Tok::Kw(s) => s,
+                        other => bail!("TRAVERSE: expected relation name, got {:?}", other),
+                    };
+                    q.traverse = Some(rel);
                 }
 
                 _ => { self.advance(); } // skip unrecognised
@@ -435,6 +446,18 @@ pub fn execute(db: &Db, nql: &str) -> Result<Vec<Value>> {
             traced.extend(chain);
         }
         rows = traced;
+    }
+
+    // ── TRAVERSE rel — one-hop named-relation lookup ──────────────────────────
+
+    if let Some(ref rel) = q.traverse {
+        let mut traversed: Vec<Node> = vec![];
+        for root in &rows {
+            let frm = format!("{}:{}", root.coll, root.id);
+            let neighbors = db.neighbors(&frm, rel);
+            traversed.extend(neighbors);
+        }
+        rows = traversed;
     }
 
     // ── ORDER BY (post-filter sort if no sorted index was used) ───────────────

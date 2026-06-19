@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::Result;
+use dashmap::DashMap;
 use serde_json::Value;
 use parking_lot::RwLock;
 
@@ -40,6 +41,10 @@ pub struct Db {
     /// Cold starts set this true in the background thread when scan completes.
     /// Writes are held with 503 until this is true; reads always proceed.
     pub startup_ready:  Arc<AtomicBool>,
+    /// Seq → hash lookup for v1 compatibility. Populated by put(), put_batch(),
+    /// and the cold-scan background pass. Only covers nodes from the current
+    /// process session + cold-scan; older seqs not in this map cannot be resolved.
+    seq_index:          Arc<DashMap<u64, String>>,
 }
 
 impl Db {
@@ -57,6 +62,7 @@ impl Db {
             head:           RwLock::new(String::new()),
             startup_ready:  Arc::new(AtomicBool::new(true)),  // always ready
             manifest_dirty: Arc::new(AtomicBool::new(false)),
+            seq_index:      Arc::new(DashMap::new()),
         }
     }
 
@@ -79,6 +85,7 @@ impl Db {
             head: RwLock::new(String::new()),
             startup_ready:  Arc::new(AtomicBool::new(false)),
             manifest_dirty: Arc::new(AtomicBool::new(false)),
+            seq_index:      Arc::new(DashMap::new()),
         };
 
         // Auto-migrate v1 → v2 if needed (pass DEK so encrypted AOFs convert correctly)
@@ -189,6 +196,7 @@ impl Db {
 
         // Write to object store (atomic, content-addressed)
         let hash = self.objects.write(&mut node)?;
+        self.seq_index.insert(seq, hash.clone());
 
         // Update id index (atomic file)
         self.id_index.set(coll, id, &hash)?;
@@ -258,6 +266,7 @@ impl Db {
 
         // Sorted indexes + causal graph (sequential — small overhead, usually no indexes)
         for node in &nodes {
+            self.seq_index.insert(node.seq, node.hash.clone());
             if let Value::Object(ref obj) = node.data {
                 for (field, value) in obj {
                     if self.sorted_indexes.has(&node.coll, field) {
@@ -474,6 +483,50 @@ impl Db {
             }
         }
     }
+
+    /// Resolve a sequence number to its content hash (v1 compatibility).
+    /// Only covers nodes written in the current process session + cold-scan nodes.
+    pub fn get_hash_by_seq(&self, seq: u64) -> Option<String> {
+        self.seq_index.get(&seq).map(|r| r.clone())
+    }
+
+    /// Add an explicit named relation edge between two documents.
+    /// frm and to are "coll:id" strings. Edges are stored in the graph store
+    /// as: graph/{frm_hash}/{rel}/{to_hash} and the reverse.
+    pub fn link(&self, frm: &str, rel: &str, to: &str) -> Result<()> {
+        // Parse "coll:id" → (coll, id)
+        let (frm_coll, frm_id) = frm.split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("link frm must be 'coll:id', got: {}", frm))?;
+        let (to_coll, to_id) = to.split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("link to must be 'coll:id', got: {}", to))?;
+
+        let frm_hash = self.id_index.get(frm_coll, frm_id)
+            .ok_or_else(|| anyhow::anyhow!("link: frm not found: {}", frm))?;
+        let to_hash = self.id_index.get(to_coll, to_id)
+            .ok_or_else(|| anyhow::anyhow!("link: to not found: {}", to))?;
+
+        let rev = format!("{}_rev", rel);
+        self.graph.add_edge(&frm_hash, rel, &to_hash)?;
+        self.graph.add_edge(&to_hash, &rev, &frm_hash)?;
+        Ok(())
+    }
+
+    /// Get all neighbor hashes for a node via a named relation.
+    /// frm is "coll:id". Returns current-version Node objects.
+    pub fn neighbors(&self, frm: &str, rel: &str) -> Vec<Node> {
+        let (coll, id) = match frm.split_once(':') {
+            Some(p) => p,
+            None    => return vec![],
+        };
+        let hash = match self.id_index.get(coll, id) {
+            Some(h) => h,
+            None    => return vec![],
+        };
+        self.graph.outgoing(&hash, rel)
+            .into_iter()
+            .filter_map(|h| self.objects.read(&h).ok())
+            .collect()
+    }
 }
 
 /// Background cold-scan worker. Takes Arc<Db> — safe, Db is on the heap.
@@ -522,6 +575,7 @@ fn cold_scan_background_arc(db: Arc<Db>) {
     seq_atomic.store(max_seq + 1, Ordering::SeqCst);
 
     for node in &nodes {
+        db.seq_index.insert(node.seq, node.hash.clone());
         if let Value::Object(ref obj) = node.data {
             for (field, value) in obj {
                 if sorted_indexes.has(&node.coll, field) {
