@@ -563,11 +563,23 @@ def main() -> None:
     if args.dag:
         import shutil as _shutil, subprocess as _sub, sys as _sys
         _pkg_dir = os.path.dirname(os.path.abspath(__file__))
-        # Include .exe variants for Windows; order: bundled wheel binary first
+        _cwd     = os.getcwd()
+        # Include .exe variants for Windows; search order:
+        # 1. Bundled in the Python wheel (platform wheel includes the binary)
+        # 2. PATH
+        # 3. Cargo release build relative to CWD (built from source)
+        # 4. Cargo release build relative to the package location
         _names = ["nedbd-v2", "nedbd_v2", "nedbd-v2.exe", "nedbd_v2.exe"]
+        _cargo_names = ["nedbd", "nedbd.exe"]  # cargo output is just "nedbd"
+        _cargo_dirs = [
+            os.path.join(_cwd, "rust", "nedb-v2", "target", "release"),
+            os.path.join(_cwd, "target", "release"),
+            os.path.join(os.path.dirname(_pkg_dir), "rust", "nedb-v2", "target", "release"),
+        ]
         _candidates = (
             [os.path.join(_pkg_dir, n) for n in _names]
             + [_shutil.which(n) or "" for n in _names]
+            + [os.path.join(d, n) for d in _cargo_dirs for n in _cargo_names]
         )
         _bin = next((c for c in _candidates if c and os.path.isfile(c)), None)
         if _bin is None:
