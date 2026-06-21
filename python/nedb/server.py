@@ -349,6 +349,13 @@ def make_handler(manager: Manager, token: Optional[str]):
                         db.link(str(b["frm"]), str(b["rel"]), str(b["to"]))
                         self._send(200, {"ok": True, "seq": db.seq, "head": db.head})
                         return
+                    if method == "POST" and action == "neighbors":
+                        b = self._body()
+                        if not b.get("node") or not b.get("rel"):
+                            raise HttpError(400, "node and rel are required")
+                        nodes = db.neighbors(str(b["node"]), str(b["rel"]))
+                        self._send(200, {"nodes": nodes, "count": len(nodes)})
+                        return
                     if method == "GET" and action == "verify":
                         self._send(200, {"ok": db.verify(), "seq": db.seq, "head": db.head})
                         return

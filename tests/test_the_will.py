@@ -111,17 +111,9 @@ class HttpDb:
         self._v = None
 
     def neighbors(self, node: str, rel: str):
-        """Returns list of neighbor node ID strings via NQL TRAVERSE."""
-        if ":" not in node:
-            return []
-        coll, nid = node.split(":", 1)
-        try:
-            rows = self._query_rows(
-                f'FROM {coll} WHERE _id = "{nid}" TRAVERSE {rel}'
-            )
-            return [row.get("_id", str(i)) for i, row in enumerate(rows)]
-        except RuntimeError:
-            return []
+        """Returns list of neighbor node ID strings via /neighbors endpoint."""
+        r = _http("POST", self._url("neighbors"), {"node": node, "rel": rel})
+        return r.get("nodes", [])
 
     def query(self, nql: str):
         """Returns list of JSON strings (mirrors NedbCore.query)."""
