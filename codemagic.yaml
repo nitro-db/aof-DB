@@ -100,21 +100,34 @@ workflows:
 
       - name: Upload Mac arm64 binaries to GitHub release
         script: |
-          # Install gh CLI if not present
           which gh || brew install gh
           VERSION=$(node -e "console.log(require('./package.json').version)")
           TAG="v$VERSION"
           echo "Uploading Mac arm64 artifacts to GitHub release $TAG"
-          # Upload nedbd-v2 binary (named for the pypi fat-wheel assembly job)
+          # nedbd-v2 server binary
           cp python/nedb/nedbd-v2 nedbd-v2-darwin-arm64
-          gh release upload "$TAG" nedbd-v2-darwin-arm64 \
-            --repo Eth-Interchained/nedb --clobber
-          # Upload napi .node addon
-          for f in *.node; do
-            [ -f "$f" ] && gh release upload "$TAG" "$f" \
-              --repo Eth-Interchained/nedb --clobber || true
+          gh release upload "$TAG" nedbd-v2-darwin-arm64 --repo Eth-Interchained/nedb --clobber
+          # _native extension (so pypi fat-wheel includes it for Mac users)
+          for f in dist/*.whl; do
+            python3 -c "
+import zipfile, os, sys
+with zipfile.ZipFile('$f') as z:
+    for name in z.namelist():
+        if '_native' in name and name.startswith('nedb/'):
+            z.extract(name, '.')
+            src = name
+            dst = os.path.basename(name)
+            os.rename(src, dst)
+            print('extracted:', dst)
+"
           done
-          echo "Uploaded: nedbd-v2-darwin-arm64 $(ls *.node 2>/dev/null)"
+          for f in _native*darwin*arm64*; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo Eth-Interchained/nedb --clobber || true
+          done
+          # napi .node addon
+          for f in *.node; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo Eth-Interchained/nedb --clobber || true
+          done
 
     artifacts:
       - dist/*.whl
@@ -204,16 +217,30 @@ workflows:
           VERSION=$(node -e "console.log(require('./package.json').version)")
           TAG="v$VERSION"
           echo "Uploading Mac x86_64 artifacts to GitHub release $TAG"
-          # Upload nedbd-v2 binary (named for the pypi fat-wheel assembly job)
+          # nedbd-v2 server binary
           cp python/nedb/nedbd-v2 nedbd-v2-darwin-x64
-          gh release upload "$TAG" nedbd-v2-darwin-x64 \
-            --repo Eth-Interchained/nedb --clobber
-          # Upload napi .node addon
-          for f in *.node; do
-            [ -f "$f" ] && gh release upload "$TAG" "$f" \
-              --repo Eth-Interchained/nedb --clobber || true
+          gh release upload "$TAG" nedbd-v2-darwin-x64 --repo Eth-Interchained/nedb --clobber
+          # _native extension
+          for f in dist/*.whl; do
+            python3 -c "
+import zipfile, os, sys
+with zipfile.ZipFile('$f') as z:
+    for name in z.namelist():
+        if '_native' in name and name.startswith('nedb/'):
+            z.extract(name, '.')
+            src = name
+            dst = os.path.basename(name)
+            os.rename(src, dst)
+            print('extracted:', dst)
+"
           done
-          echo "Uploaded: nedbd-v2-darwin-x64 $(ls *.node 2>/dev/null)"
+          for f in _native*darwin*x86_64*; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo Eth-Interchained/nedb --clobber || true
+          done
+          # napi .node addon
+          for f in *.node; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo Eth-Interchained/nedb --clobber || true
+          done
 
     artifacts:
       - dist/*.whl

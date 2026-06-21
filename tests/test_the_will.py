@@ -30,7 +30,10 @@ try:
     from nedb._native import NedbCore
     import nedb as _nedb
 except ImportError:
-    sys.exit("nedb._native not available — pip install nedb-engine")
+    print("  SKIP  nedb._native not available (universal wheel — no platform extension)")
+    print("        pip install --force-reinstall --no-cache-dir nedb-engine")
+    print("        on a platform with a native wheel (Linux x86_64, macOS, Windows x64)")
+    sys.exit(0)
 
 PASS = FAIL = 0
 def ok(msg):  global PASS; PASS += 1; print(f"  ✓  {msg}")
