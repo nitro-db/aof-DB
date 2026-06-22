@@ -73,4 +73,4 @@ __all__ = [
     "wrap_redis", "WrappedRedis",
     "_native", "__has_native__",
 ]
-__version__ = "2.2.26"
+__version__ = "2.2.27"
