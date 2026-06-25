@@ -279,6 +279,16 @@ impl ObjectStore {
         Ok(())
     }
 
+    /// Compact the packed segment store (v3), keeping only objects whose hash is
+    /// in `live` and reclaiming the rest. No-op (zeroed stats) for loose-object
+    /// and in-memory modes.
+    pub fn compact(&self, live: &std::collections::HashSet<String>) -> Result<crate::segment::CompactStats> {
+        match self.seg {
+            Some(ref seg) => seg.compact(live),
+            None => Ok(crate::segment::CompactStats::default()),
+        }
+    }
+
     /// Verify all objects. Returns (ok_count, tampered_hashes).
     pub fn verify_all(&self) -> (usize, Vec<String>) {
         use rayon::prelude::*;

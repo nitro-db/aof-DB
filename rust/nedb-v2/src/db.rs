@@ -321,6 +321,27 @@ impl Db {
         self.flush_manifest();
     }
 
+    /// Compact the v3 packed object store: keep the CURRENT version of every
+    /// document (from the id-index) and reclaim everything else. No-op unless
+    /// running with the v3 segment substrate (`--dag-v3` / NEDB_DAG_V3).
+    ///
+    /// This is a PRUNING operation: superseded/historical object versions are
+    /// dropped, so AS OF / TRACE over pruned versions is discarded — that is
+    /// what reclaims the space. Flushes first so all data is durable on disk
+    /// before the old segments are deleted.
+    pub fn compact(&self) -> Result<crate::segment::CompactStats> {
+        self.flush_all();
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for coll in self.id_index.collections() {
+            for id in self.id_index.list_ids(&coll) {
+                if let Some(h) = self.id_index.get(&coll, &id) {
+                    live.insert(h);
+                }
+            }
+        }
+        self.objects.compact(&live)
+    }
+
     /// Flush MANIFEST to disk if dirty. No-op for in-memory databases.
     pub fn flush_manifest_if_dirty(&self) {
         if self.root == std::path::PathBuf::from(":memory:") { return; }
