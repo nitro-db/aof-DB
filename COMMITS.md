@@ -10,6 +10,7 @@ _Last updated: 2026-06-26 — release **v2.3.333** (comprehensive v3 documentati
 
 | Version | What shipped | Registries |
 |---|---|---|
+| **v2.4.1** | CI-fixup re-tag — first **complete** cross-platform publish (all native wheels incl. macOS + the universal wheel) since the Codemagic `GITHUB_TOKEN` fix. Skeleton version bump, no engine change; marked stable in README. | PyPI · npm · crates.io |
 | **v2.4.0** | Cycle-closing minor — the v3 storage line consolidated & formally spec'd (`docs/SPEC.md` §3: v2 object store + v3 segment substrate + durability/fast-fsync). No new engine code; packages bumped 2.3.3333 → 2.4.0. | PyPI · npm · crates.io |
 | **v2.3.3333** | Opt-in macOS fast-fsync for the v3 segment store (`NEDB_FAST_FSYNC`, default off) — plain `fsync(2)` instead of `F_FULLFSYNC`, no-op off-mac. Closes the 3's cycle; next is 2.4.0. | PyPI · npm · crates.io |
 | **v2.3.333** | Comprehensive v3 documentation (README section + this log + ideas.md). Engine code unchanged from 2.3.33. | PyPI · npm · crates.io |
