@@ -97,6 +97,37 @@ pub struct SegmentStore {
     index: DashMap<String, SegmentLocation>,
     active: Mutex<Active>,
     max_segment_bytes: u64,
+    /// macOS fast-fsync opt-in (from `NEDB_FAST_FSYNC`). When true, durability
+    /// points use a plain `fsync(2)` instead of std's `sync_all` (= F_FULLFSYNC
+    /// on macOS). Off by default → identical, full-durability behavior.
+    fast_fsync: bool,
+}
+
+/// Durability point for a segment file.
+///
+/// Default (`fast = false`) is `File::sync_all()` everywhere — the safe,
+/// power-loss-durable choice. On macOS that maps to `F_FULLFSYNC` (a full
+/// hardware-cache flush to platter), which is often 10-100x slower than the
+/// plain `fsync(2)` Linux/Windows already use, especially on Fusion/SATA disks.
+///
+/// With `fast = true` (set via `NEDB_FAST_FSYNC`), macOS uses plain `fsync(2)`:
+/// the write reaches the drive (crash-safe) but the drive may still hold it in a
+/// volatile cache, so a sudden power cut could lose the last unsynced batch. NEDB
+/// v3 tolerates that — content-addressed objects, torn-tail truncation on open,
+/// and a reconstructible chainstate (re-sync from peers) — which is exactly why
+/// Bitcoin Core itself uses plain fsync for LevelDB on macOS. On non-macOS the
+/// flag is a no-op (`sync_all` is already a plain fsync / FlushFileBuffers).
+fn durable_sync(file: &File, fast: bool) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    if fast {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: `file` is a valid, open descriptor for the duration of the call.
+        let rc = unsafe { libc::fsync(file.as_raw_fd()) };
+        return if rc == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) };
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = fast;
+    file.sync_all()
 }
 
 impl SegmentStore {
@@ -183,11 +214,21 @@ impl SegmentStore {
             .with_context(|| format!("open active segment {:?}", active_path))?;
         file.seek(SeekFrom::Start(active_end))?;
 
+        let fast_fsync = std::env::var("NEDB_FAST_FSYNC")
+            .map(|v| {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true")
+                         || v.eq_ignore_ascii_case("on")
+                         || v.eq_ignore_ascii_case("yes")
+            })
+            .unwrap_or(false);
+
         Ok(Self {
             dir,
             index,
             active: Mutex::new(Active { id: active_id, file, offset: active_end }),
             max_segment_bytes,
+            fast_fsync,
         })
     }
 
@@ -340,7 +381,7 @@ impl SegmentStore {
         // Roll over if this record would push the active segment past the cap.
         if active.offset > 0 && active.offset + record_size > self.max_segment_bytes {
             let _ = active.file.flush();
-            let _ = active.file.sync_all();
+            let _ = durable_sync(&active.file, self.fast_fsync);
             // Seal: write the .idx for the segment we're leaving behind.
             let sealed_id = active.id;
             let entries = self.entries_for_segment(sealed_id);
@@ -390,7 +431,7 @@ impl SegmentStore {
     pub fn sync(&self) -> Result<()> {
         let mut active = self.active.lock().unwrap();
         let _ = active.file.flush();
-        active.file.sync_all().context("fsync active segment")?;
+        durable_sync(&active.file, self.fast_fsync).context("fsync active segment")?;
         Ok(())
     }
 
@@ -447,7 +488,7 @@ impl SegmentStore {
 
             if cur_off > 0 && cur_off + record_size > self.max_segment_bytes {
                 let _ = cur_file.flush();
-                cur_file.sync_all().context("fsync sealed compaction segment")?;
+                durable_sync(&cur_file, self.fast_fsync).context("fsync sealed compaction segment")?;
                 let entries: Vec<(String, u64, u32)> = new_index
                     .iter()
                     .filter(|e| e.value().segment_id == cur_id)
@@ -475,7 +516,7 @@ impl SegmentStore {
             cur_off += record_size;
         }
         let _ = cur_file.flush();
-        cur_file.sync_all().context("fsync active compaction segment")?;
+        durable_sync(&cur_file, self.fast_fsync).context("fsync active compaction segment")?;
 
         // The last new segment becomes the active one (reuse its handle).
         let live_objects = to_copy.len();
