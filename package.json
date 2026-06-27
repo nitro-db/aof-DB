@@ -2,13 +2,14 @@
   "name": "aof-db",
   "version": "2.4.468",
   "description": "NEDB — hash-chained, time-traveling, bi-temporal embedded database with Rust native core. SQL, Redis, MongoDB adapters. Causal Write Provenance. RESP2 wire protocol.",
-  "main": "index.js",
+  "main": "nedb-distro.js",
   "types": "index.d.ts",
   "bin": {
     "nedbd-v2": "./nedbd-v2.js",
     "nedbdv2": "./nedbd-v2.js"
   },
   "files": [
+    "nedb-distro.js",
     "index.js",
     "index.d.ts",
     "nedbd-v2.js",
