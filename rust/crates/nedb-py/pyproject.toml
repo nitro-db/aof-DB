@@ -8,8 +8,8 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "nitrodb"
-version = "2.4.3"
+name = "aof-db"
+version = "2.4.68"
 description = "NEDB — versioned, self-compressing, time-traveling embedded database with Rust native core"
 requires-python = ">=3.8"
 license = { text = "GPL-3.0-or-later" }
