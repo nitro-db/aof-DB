@@ -68,9 +68,17 @@ function main() {
     }
   }
 
+  // aof-db defaults: append-only v3 segment store + macOS fast-fsync. Injected
+  // into the daemon's env (the engine reads these at database open). Set-if-unset,
+  // so explicit NEDB_DAG_V3=0 / NEDB_FAST_FSYNC=0 (or flags) from the caller win.
+  const env = { ...process.env };
+  if (env.NEDB_DAG_V3 === undefined) env.NEDB_DAG_V3 = "1";
+  if (env.NEDB_FAST_FSYNC === undefined) env.NEDB_FAST_FSYNC = "1";
+
   const child = spawn(binPath, process.argv.slice(2), {
     stdio: "inherit",
     windowsHide: false,
+    env,
   });
 
   child.on("error", (err) => {
