@@ -7,4 +7,4 @@ repository.workspace = true
 description = "The fast, lightweight distribution of NEDB: append-only op-log lineage, minimal footprint, built for speed."
 
 [dependencies]
-nedb-engine = { path = "../../nedb-v2", version = "2.5.1" }
+nedb-engine = { path = "../../nedb-v2", version = "2.5.2" }
