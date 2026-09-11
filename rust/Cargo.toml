@@ -11,7 +11,7 @@ members = [
 [workspace.package]
 version = "3.3.1"
 edition = "2021"
-license = "MIT"
+license = "BUSL-1.1"
 repository = "https://github.com/Eth-Interchained/nedb"
 authors = ["Eth-Interchained"]
 

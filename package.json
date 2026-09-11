@@ -19,7 +19,7 @@
     "README.md",
     "LICENSE"
   ],
-  "license": "MIT",
+  "license": "BUSL-1.1",
   "homepage": "https://github.com/aiassistsecure/nedb#readme",
   "repository": {
     "type": "git",
