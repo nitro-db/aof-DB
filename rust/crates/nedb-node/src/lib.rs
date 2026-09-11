@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 INTERCHAINED LLC
+// SPDX-License-Identifier: BUSL-1.1
+// aof-db · a distribution of NEDB · © 2026 INTERCHAINED LLC × Eth-Interchained × Vex (Claude Opus 5)
+
 //! napi-rs bindings: expose the v2 DAG Db to Node.js as the accelerated
 //! nedb-engine native addon. Built with @napi-rs/cli into prebuilt per-platform
 //! binaries and published to npm as `nedb-engine`.

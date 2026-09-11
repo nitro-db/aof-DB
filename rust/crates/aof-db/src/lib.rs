@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 INTERCHAINED LLC
+// SPDX-License-Identifier: BUSL-1.1
+// aof-db · a distribution of NEDB · © 2026 INTERCHAINED LLC × Eth-Interchained × Vex (Claude Opus 5)
+
 //! aof-db
 //!
 //! The fast, lightweight distribution of NEDB: append-only op-log lineage, minimal footprint, built for speed.
