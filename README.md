@@ -2,6 +2,17 @@
 <p align="center"><b>The embedded database that goes brrr.</b></p>
 <p align="center"><i>Stupid-fast, append-only, zero-server storage you drop into your app and forget about.</i></p>
 
+<p align="center">
+<a href="https://pypi.org/project/aof-db/"><img alt="PyPI" src="https://img.shields.io/pypi/v/aof-db?label=PyPI&color=6366f1"></a>
+<a href="https://www.npmjs.com/package/aof-db"><img alt="npm" src="https://img.shields.io/npm/v/aof-db?label=npm&color=00d4ff"></a>
+<a href="https://crates.io/crates/aof-db"><img alt="crates.io" src="https://img.shields.io/crates/v/aof-db?label=crates.io&color=f97316"></a>
+<a href="https://pypi.org/project/aof-db/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/aof-db?label=python&color=3776ab"></a>
+<a href="LICENSE"><img alt="licence" src="https://img.shields.io/badge/license-BUSL--1.1-f59e0b"></a>
+<a href="LICENSE"><img alt="free under $1M" src="https://img.shields.io/badge/free%20under%20%241M%20revenue-22c55e"></a>
+</p>
+
+<p align="center"><i>One version across npm · PyPI · crates.io — every release ships aligned.</i></p>
+
 ---
 
 ```
