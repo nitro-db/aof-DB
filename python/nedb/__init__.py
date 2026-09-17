@@ -93,4 +93,4 @@ __all__ = [
     "verify_proof", "fold_head",
     "_native", "__has_native__",
 ]
-__version__ = "10.30.90"
+__version__ = "10.30.91"
